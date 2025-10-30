@@ -1,0 +1,308 @@
+services:
+  caddy:
+    image: lucaslorentz/caddy-docker-proxy:ci-alpine
+    container_name: caddy-monitoring
+    ports:
+      - "${APP_PORT:-80}:80"
+      - "${APP_SECURE_PORT:-443}:443"
+      - "${APP_SECURE_PORT:-443}:443/udp"
+    environment:
+      - CADDY_INGRESS_NETWORKS=proxy
+      - CADDY_GLOBAL_OPTIONS=log { output stdout level ${CADDY_DEBUG_LEVEL:-warn} }
+      - CADDY_LOG_LEVEL=${CADDY_DEBUG_LEVEL:-warn}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${CADDY_DATA:-$PWD/docker}/caddy/conf:/etc/caddy
+      - ${CADDY_DATA:-$PWD/docker}/caddy/srv:/srv
+      - ${CADDY_DATA:-$PWD/docker}/caddy/data:/data
+      - ${CADDY_DATA:-$PWD/docker}/caddy/config:/config
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    networks:
+      - monitoring
+      - proxy
+
+  registry:
+    restart: unless-stopped
+    image: "${REGISTRY_IMAGE:-registry:3}"
+    container_name: registry-monitoring
+    expose:
+      - ${REGISTRY_PORT:-5000}:5000
+    environment:
+      REGISTRY_HTTP_RELATIVEURLS: "true"
+      REGISTRY_HTTP_ADDR: 0.0.0.0:5000
+      REGISTRY_AUTH: htpasswd
+      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+      REGISTRY_AUTH_HTPASSWD_REALM: Registry Realm
+      REGISTRY_STORAGE_DELETE_ENABLED: true
+    volumes:
+      - ${REGISTRY_DATA:-$PWD/docker}/registry/data:/var/lib/registry
+      - ${REGISTRY_DATA:-$PWD/docker}/registry/certs:/certs
+      - ${REGISTRY_DATA:-$PWD/docker}/registry/auth:/auth
+    labels:
+      caddy: ${REGISTRY_HOSTNAME:-hub-dev.localhost}
+      caddy.reverse_proxy: "{{upstreams 5000}}"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - monitoring
+      - proxy
+
+  node-exporter:
+    image: "${NODEEXPORTER_IMAGE:-prom/node-exporter:latest}"
+    container_name: node-exporter-monitoring
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.rootfs=/rootfs"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    expose:
+      - 9100
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+    networks:
+      - monitoring
+
+  prometheus:
+    image: "${PROMETHEUS_IMAGE:-prom/prometheus:latest}"
+    container_name: prometheus-monitoring
+    restart: unless-stopped
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ${PROMETHEUS_DATA:-$PWD/docker}/prometheus/secrets:/etc/prometheus/secrets
+      - ${PROMETHEUS_DATA:-$PWD/docker}/prometheus/data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
+      - "--web.enable-remote-write-receiver"
+    expose:
+      - 9090
+    labels:
+      caddy: ${PROMETHEUS_HOSTNAME:-prometheus-dev.localhost}
+      caddy.reverse_proxy: "{{upstreams 9090}}"
+      caddy.basic_auth: "*"
+      caddy.basic_auth.admin: "${PROMETHEUS_ADMIN_PASSWORD}"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - monitoring
+      - proxy
+
+  cadvisor:
+    image: "${CADVISOR_IMAGE:-gcr.io/cadvisor/cadvisor:latest}"
+    container_name: cadvisor-monitoring
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    restart: unless-stopped
+    devices:
+      - /dev/kmsg
+    expose:
+      - 8080
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - monitoring
+
+  grafana:
+    image: "${GRAFANA_IMAGE:-grafana/grafana:latest}"
+    container_name: grafana-monitoring
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./docker/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_DOMAIN=${GRAFANA_HOSTNAME:-grafana-dev.localhost}
+      - GF_SERVER_ROOT_URL=https://${GRAFANA_HOSTNAME:-grafana-dev.localhost}
+      - GF_SERVER_SERVE_FROM_SUB_PATH=false
+      - GF_SECURITY_COOKIE_SECURE=true
+    restart: unless-stopped
+    expose:
+      - 3000
+    labels:
+      caddy: ${GRAFANA_HOSTNAME:-grafana-dev.localhost}
+      caddy.reverse_proxy: "{{upstreams 3000}}"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - monitoring
+      - proxy
+
+  mongodb:
+    image: "${MONGODB_IMAGE:-mongo:7.0}"
+    container_name: mongodb-monitoring
+    volumes:
+      - ${MONGODB_DATA:-$PWD/docker}/graylog/mongodb:/data/db
+    restart: "on-failure"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - monitoring
+
+  # DataNode manages Graylog's OpenSearch cluster
+  datanode:
+    image: "${DATANODE_IMAGE:-graylog/graylog-datanode:6.3}"
+    container_name: datanode-monitoring
+    hostname: datanode
+    environment:
+      GRAYLOG_DATANODE_NODE_ID_FILE: /var/lib/graylog-datanode/node-id
+      GRAYLOG_DATANODE_PASSWORD_SECRET: ${GRAYLOG_PASSWORD_SECRET:?Please configure GRAYLOG_PASSWORD_SECRET in the .env file}
+      GRAYLOG_DATANODE_ROOT_PASSWORD_SHA2: ${GRAYLOG_ROOT_PASSWORD_SHA2:?Please configure GRAYLOG_ROOT_PASSWORD_SHA2 in the .env file}
+      GRAYLOG_DATANODE_MONGODB_URI: mongodb://mongodb:27017/graylog
+    ulimits:
+      memlock:
+        hard: -1
+        soft: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    depends_on:
+      mongodb:
+        condition: service_started
+    ports:
+      - 8999:8999/tcp # DataNode API
+      - 9200:9200/tcp
+      - 9300:9300/tcp
+    volumes:
+      - ${GRAYLOG_DATA:-$PWD/docker}/graylog/datanode:/var/lib/graylog-datanode
+    restart: on-failure
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - monitoring
+
+  graylog:
+    image: "${GRAYLOG_IMAGE:-graylog/graylog:6.3}"
+    container_name: graylog-monitoring
+    hostname: server
+    depends_on:
+      mongodb:
+        condition: "service_started"
+      opensearch:
+        condition: "service_started"
+    entrypoint: /usr/bin/tini --  /docker-entrypoint.sh
+    environment:
+      GRAYLOG_NODE_ID_FILE: /usr/share/graylog/data/data/node-id
+      GRAYLOG_PASSWORD_SECRET: ${GRAYLOG_PASSWORD_SECRET:?Please configure GRAYLOG_PASSWORD_SECRET in the .env file}
+      GRAYLOG_ROOT_PASSWORD_SHA2: ${GRAYLOG_ROOT_PASSWORD_SHA2:?Please configure GRAYLOG_ROOT_PASSWORD_SHA2 in the .env file}
+      GRAYLOG_HTTP_BIND_ADDRESS: 0.0.0.0:9000
+      GRAYLOG_HTTP_EXTERNAL_URI: http://localhost:9000/
+      GRAYLOG_MONGODB_URI: mongodb://mongodb:27017/graylog
+      GRAYLOG_ELASTICSEARCH_HOSTS: http://opensearch:9200
+      GRAYLOG_HTTP_VERSION_CHECK_ENABLED: false
+      GRAYLOG_DISABLE_VERSION_CHECK: true
+    ports:
+      - 5044:5044/tcp # Beats
+      - 5140:5140/udp # Syslog
+      - 5140:5140/tcp # Syslog
+      - 5555:5555/tcp # RAW TCP
+      - 5555:5555/udp # RAW UDP
+      - 9000:9000/tcp # Server API
+      - 12201:12201/tcp # GELF TCP
+      - 12201:12201/udp # GELF UDP
+      - 13301:13301/tcp # Forwarder data
+      - 13302:13302/tcp # Forwarder config
+    volumes:
+      - ${GRAYLOG_DATA:-$PWD/docker}/graylog/data/data:/usr/share/graylog/data/data
+      - ${GRAYLOG_DATA:-$PWD/docker}/graylog/data/journal:/usr/share/graylog/data/journal
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    labels:
+      caddy: ${GRAYLOG_HOSTNAME:-graylog-dev.localhost}
+      caddy.reverse_proxy: "{{upstreams 9000}}"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - monitoring
+      - proxy
+
+  opensearch:
+    image: "${OPENSEARCH_IMAGE:-opensearchproject/opensearch:2.12.0}"
+    container_name: opensearch-monitoring
+    volumes:
+      - ${OPENSEARCH_DATA:-$PWD/docker/graylog}/opensearch/data:/usr/share/opensearch/data
+    environment:
+      - "bootstrap.memory_lock=true"
+      - "discovery.type=single-node"
+      - "action.auto_create_index=false"
+      - "plugins.security.ssl.http.enabled=false"
+      - "plugins.security.disabled=true"
+      - "OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD}"
+      - "OPENSEARCH_JAVA_OPTS=${OPENSEARCH_JAVA_OPTS}"
+    ulimits:
+      memlock:
+        hard: -1
+        soft: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+    restart: "on-failure"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - monitoring
+
+volumes:
+  grafana_data: {}
+
+networks:
+  monitoring:
+    driver: bridge
+    name: monitoring
+  proxy:
+    internal: true
+    driver: bridge
+    name: proxy

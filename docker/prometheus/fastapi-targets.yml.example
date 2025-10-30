@@ -1,0 +1,17 @@
+# FastAPI Targets Configuration Example
+# Copy this file to fastapi-targets.yml and configure with your production values
+
+# Example configuration for FastAPI application metrics
+# Uncomment and configure with your actual endpoints
+
+# - targets: ['example-api-1.example.com']
+#   labels:
+#     job: fastapi-metrics
+#     instance: gateway
+#     __metrics_path__: /metrics
+
+# - targets: ['example-api-2.example.com']
+#   labels:
+#     job: fastapi-metrics
+#     instance: api
+#     __metrics_path__: /metrics
