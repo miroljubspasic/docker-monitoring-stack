@@ -9,7 +9,6 @@ services:
       - "8000:8000"
     volumes:
       # Persistent data
-      - checkmk-data:/omd/sites
       - ${CHECKMK_DATA:-$PWD/docker}/checkmk/data:/omd/sites
 
       # Email configuration script
