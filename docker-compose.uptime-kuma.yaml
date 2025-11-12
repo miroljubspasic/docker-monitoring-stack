@@ -1,0 +1,44 @@
+services:
+  uptime-kuma:
+    image: "${UPTIME_KUMA_IMAGE:-louislam/uptime-kuma:latest}"
+    container_name: uptime-kuma
+    hostname: uptime-kuma-server
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      # Persistent data
+      - ${UPTIME_KUMA_DATA:-$PWD/docker}/uptime-kuma/data:/app/data
+
+    environment:
+      # Uptime Kuma configuration
+      - TZ=Europe/Belgrade
+      - UMASK=0022 # Set your file permissions manually
+      - UPTIME_KUMA_PORT=3001
+      - UPTIME_KUMA_HOST=0.0.0.0
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001"]
+      interval: 30s
+      retries: 3
+      start_period: 10s
+      timeout: 5s
+
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 8192
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    labels:
+      caddy: ${UPTIME_KUMA_HOSTNAME:-uptime-kuma-dev.localhost}
+      caddy.reverse_proxy: "{{upstreams 3001}}"
+
+    networks:
+      - monitoring
+      - proxy

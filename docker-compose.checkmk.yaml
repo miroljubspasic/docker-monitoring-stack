@@ -1,0 +1,58 @@
+services:
+  checkmk:
+    image: "${CHECKMK_IMAGE:-checkmk/check-mk-raw:2.4.0-latest}"
+    container_name: checkmk
+    hostname: checkmk-server
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+      - "8000:8000"
+    volumes:
+      # Persistent data
+      - checkmk-data:/omd/sites
+      - ${CHECKMK_DATA:-$PWD/docker}/checkmk/data:/omd/sites
+
+      # Email configuration script
+      - ./docker/checkmk/scripts/configure-email.sh:/usr/local/bin/configure-email.sh:ro
+
+    environment:
+      # CheckMK site configuration
+      - CMK_SITE_ID=${CHECKMK_SITE_ID:-monitoring}
+      - CMK_LIVESTATUS_TCP=on
+      - CMK_PASSWORD=${CHECKMK_ADMIN_PASSWORD:-admin123}
+      - TZ=Europe/Belgrade
+
+      # Email SMTP settings
+      - MAIL_RELAY_HOST=${MAIL_RELAY_HOST:-smtp.gmail.com}
+      - MAIL_RELAY_PORT=${MAIL_RELAY_PORT:-587}
+      - MAIL_FROM=${MAIL_FROM:-checkmk@yourdomain.com}
+      - MAIL_USERNAME=${MAIL_USERNAME}
+      - MAIL_PASSWORD=${MAIL_PASSWORD}
+      - NOTIFICATION_EMAIL=${NOTIFICATION_EMAIL:-admin@yourdomain.com}
+
+    tmpfs:
+      - /opt/omd/sites/cmk/tmp:uid=1000,gid=1000
+
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 524288
+
+    # Configure email and run startup notification in background
+    command: >
+      sh -c "
+      (sleep 30 && sh /usr/local/bin/configure-email.sh) &
+      exec /docker-entrypoint.sh
+      "
+
+    labels:
+      caddy: ${CHECKMK_HOSTNAME:-checkmk-dev.localhost}
+      caddy.reverse_proxy: "{{upstreams 5000}}"
+
+    networks:
+      - monitoring
+      - proxy
+
+volumes:
+  checkmk-data:
+    driver: local
